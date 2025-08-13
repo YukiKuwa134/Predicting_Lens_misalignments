@@ -6,7 +6,7 @@
 機械学習によるレンズ組み立てズレの推定
 
 Predicting Lens Misalignments
-GNN使う
+GNN
 
 """
 
@@ -22,7 +22,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, global_mean_pool
 from torch_geometric.data import Data, InMemoryDataset
-from torch_geometric.loader import DataLoader 
+from torch_geometric.loader import DataLoader
 from torch.utils.data import random_split
 
 from sklearn.metrics import mean_squared_error, r2_score
@@ -39,13 +39,13 @@ fields = (-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0)  #像高比
 wavelength = 0.55 #μm
 
 n_surfaces   = 13       # 面数
-coeff_per_sf = 120      # 1面あたりのZernike係数（120個×視野1 =120）
+coeff_per_sf = 120
 
 # エレメント 面マップ
 ELEM_SURF_MAP = [
-    (1, 2),       # L1 単レンズ
-    (3, 4, 5),    # L2–L3 バルサム面 → 3 面まとめて平行移動
-    (7, 8, 9),     # L4-L5
+    (1, 2),       # L1
+    (3, 4, 5),    # L2–L3
+    (7, 8, 9),    # L4-L5
     (10, 11)      # L6
 ]
 
@@ -58,12 +58,12 @@ class LensGNN(torch.nn.Module):
         self.conv2 = GCNConv(hidden,       hidden)
         #self.conv3 = GCNConv(hidden,       hidden)   # 好みで層追加
 
-        self.readout = global_mean_pool 
+        self.readout = global_mean_pool
         self.head    = nn.Linear(hidden, n_outputs)
-        self.drop  = nn.Dropout(dropout)     
+        self.drop  = nn.Dropout(dropout)
 
     def forward(self, x, edge_index, batch):
-        if edge_index.device != x.device:          
+        if edge_index.device != x.device:
             edge_index = edge_index.to(x.device)
 
         x = F.relu(self.conv1(x, edge_index))
@@ -72,7 +72,7 @@ class LensGNN(torch.nn.Module):
 
         x = global_mean_pool(x, batch)   # (B, hidden) ← ここが重要
         x = self.drop(x)
-        return self.head(x)     
+        return self.head(x)
 
 
 class LensGraphDataset(InMemoryDataset):
@@ -105,7 +105,7 @@ class LensGraphDataset(InMemoryDataset):
         # 正しくは (視野数, zernike_kou)
         node_attr = torch.from_numpy(
             zi.reshape(len(fields), zernike_kou)
-        ).float()     
+        ).float()
 
         # 2) エッジ情報（固定ならクラス変数などで保持
         # edge_index: 双方向線形＋自己ループ
@@ -169,15 +169,13 @@ def main():
     test_ratio = 0.10
     val_ratio  = 0.10
 
-    # int() すると切り捨てなので max(1, …) で最低 1 にする
     n_test = max(1, int(dataset_len * test_ratio))
     n_val  = max(1, int(dataset_len * val_ratio))
 
-    # 残りをすべて train に
     n_train = dataset_len - n_test - n_val
     if n_train <= 0:
-        # データが少なすぎる場合は val/test を再調整
-        n_test = max(1, dataset_len // 5)    # 20% を目安に
+        # データが少なすぎる場合はval/testを再調整
+        n_test = max(1, dataset_len // 5)    # 20%を目安
         n_val  = max(1, dataset_len // 5)
         n_train = dataset_len - n_test - n_val
 
@@ -186,25 +184,21 @@ def main():
         generator=torch.Generator().manual_seed(0)
     )
 
-    # ======================================
-    # ★ DataLoader 作成
-    # ======================================
+    #DataLoader作成
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False)
     test_loader  = DataLoader(test_ds,  batch_size=64, shuffle=False)
 
-    #モデル 作成
+    #モデル作成
     model = LensGNN(in_channels=120, hidden=64, n_outputs=20).to(device)
 
-    # ----------------------------------------------------------
     sample = dataset[0].to(device)
-
-    node_count = sample.x.size(0)           # ノード数 (例: 9)
+    node_count = sample.x.size(0)
     batch_vec  = torch.zeros(
         node_count,
         dtype=torch.long,
         device=device
-    )     
+    )
 
     out = model(sample.x.to(device), sample.edge_index.to(device),batch_vec)
 
@@ -212,26 +206,13 @@ def main():
     # ---------------- モデルと学習 ----------------
     optimizer = torch.optim.Adam(model.parameters(),lr=1e-4, weight_decay=1e-5)
     criterion = nn.MSELoss()
-    
-    #---- スケジューラの定義 ----
-    # OneCycleLR 定義
-#    total_steps = max_epochs * len(train_loader)
-#    scheduler = OneCycleLR(
-#        optimizer,
-#        max_lr=3e-3,            # サイクルのピーク学習率
-#        total_steps=total_steps,
-#        pct_start=0.3,          # 学習率上昇に使う割合
-#        anneal_strategy='cos',
-#        final_div_factor=1e4    # 最終 lr = max_lr / final_div_factor
-#    )
 
-    # ↓ ここに挿入 ↓
+    #---- スケジューラの定義 ----
     scheduler = ReduceLROnPlateau(
         optimizer,
-        mode='min',         # val_loss が小さくなる方向を良しとする
-        factor=0.5,         # lr *= 0.5
-        patience=5,         # 5 epoch 改善がなければ lr を下げる
-#        verbose=True
+        mode='min',
+        factor=0.5,
+        patience=5,
     )
     best_val_r2 = -1e9
     epochs_no_imp = 0
@@ -242,7 +223,6 @@ def main():
     epochs_no_improve = 0
 
     # 学習ループ直前にindex準備
-    # ラベルリストと同じ順番で mm/deg のインデックスを作成
     label_list = [f"{ax}{i+1}"
                 for i in range(len(ELEM_SURF_MAP))   # 4
                 for ax in ("dx","dy","dz","tip","tilt")]
@@ -260,7 +240,7 @@ def main():
 
         for data in train_loader:
 
-            data = data.to(device, non_blocking=True)  
+            data = data.to(device, non_blocking=True)
             optimizer.zero_grad()
             out   = model(data.x, data.edge_index, data.batch)
             loss  = criterion(out, data.y)
@@ -274,7 +254,6 @@ def main():
         # -------- 検証 --------
         model.eval()
 
-        # ← ここで初期化
         val_loss = 0.0
         val_r2   = 0.0
 
@@ -287,20 +266,13 @@ def main():
                 # MSE の累積
                 val_loss += F.mse_loss(out, data.y, reduction="sum").item()
 
-                # R² の累積
-                # ここではバッチごとに r2_score を計算して合計し、
-                # 最後に平均をとる想定です
                 y_true = data.y.cpu().numpy().ravel()
                 y_pred = out .cpu().numpy().ravel()
                 val_r2 += r2_score(y_true, y_pred)
 
         val_loss /= len(val_loader.dataset)
-#        y_trues   = np.concatenate(y_trues, 0)
-#        y_preds   = np.concatenate(y_preds, 0)
-#        val_r2    = r2_score(y_trues, y_preds)
         val_r2   /= len(val_loader)
 
-        # ログ表示など…
         print(f"Epoch {epoch:3d}  Train MSE={train_loss:.5f}  "
             f"Val MSE={val_loss:.5f}  Val R²={val_r2:.4f}")
 
@@ -314,7 +286,7 @@ def main():
 
         # -------- Early-Stopping --------
         best_val_r2, epochs_no_imp = -1e9, 0
-        if val_r2 > best_val_r2 + 1e-4:  # 改善を閾値付きで判定
+        if val_r2 > best_val_r2 + 1e-4:
             best_val_r2 = val_r2
             torch.save(model.state_dict(), "best_gnn.pt")
             epochs_no_imp = 0
@@ -367,7 +339,7 @@ def main():
     print(f"Test  MSE = {mse_all:.6f}")
     print(f"      RMSE = {rmse_all:.6f}")
 
-    # [mm]系/[deg]系 に分けた RMSE
+    # [mm]系/[deg]系に分けたRMSE
     label_list = []
     for i in range(len(ELEM_SURF_MAP)):
         num = i+1
